@@ -1,6 +1,6 @@
 # Backend - DeporteData API
 
-API REST desarrollada con FastAPI.
+API REST desarrollada con FastAPI y conectada a los CSV reales de empleo deportivo.
 
 ## Requisitos
 
@@ -21,9 +21,17 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Para desactivar el entorno virtual una vez terminado:
-```bash
-deactivate
+## Variables de entorno
+Copia `backend/.env.example` y ajusta:
+
+- `DATA_DIR`: carpeta donde están los CSV limpios (en producción Vercel se recomienda `./data`).
+- `FRONTEND_ORIGINS`: lista de orígenes permitidos por CORS, separados por coma.
+
+Ejemplo despliegue actual:
+
+```env
+DATA_DIR=./data
+FRONTEND_ORIGINS=https://deported-data-dindr.vercel.app
 ```
 
 ## Ejecución
@@ -31,44 +39,42 @@ deactivate
 uvicorn app.main:app --reload --port 8000
 ```
 
-Endpoints disponibles:
-
-- Health check: `http://localhost:8000/health`
-- Documentación Swagger: `http://localhost:8000/docs`
-
 ## Endpoints
 
-| Método | Ruta | Protegido | Descripción |
-|--------|------|-----------|-------------|
-| GET | `/health` | No | Health check |
-| POST | `/login` | No | Autenticación, devuelve JWT |
-| POST | `/getResponseChat` | Sí | Chat RAG simulado |
-| GET | `/getDatosDashboard` | Sí | Datos y KPIs para dashboard |
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/health` | Health check |
+| POST | `/login` | Autenticación JWT básica |
+| GET | `/dashboard/kpis` | KPIs reales de empleo deportivo |
+| GET | `/dashboard/series` | Serie anual real (años y valores) |
+| POST | `/chat` | Respuesta básica basada en datos reales |
 
-Los endpoints protegidos requieren la cabecera: Authorization: Bearer <token>
-El token se obtiene llamando a `/login` con:
+### Ejemplo `POST /chat`
 ```json
 {
-  "username": "admin",
-  "password": "*admin1234"
+  "message": "¿Cómo ha crecido el empleo?"
 }
 ```
 
-## Estructura del módulo
-backend/app/
-├── init.py
-├── main.py              # Definición de endpoints
-├── funciones.py         # Lógica JWT y utilidades
-└── models_request.py    # Modelos Pydantic de request
+## Datos CSV
+Para despliegues serverless (ej. Vercel), incluye los CSV requeridos en `backend/data/`.
+Este repositorio ya incluye `backend/data/medias_anuales_demografia.csv`.
 
+## Estructura del módulo
+
+```text
+backend/app/
+├── core/config.py
+├── main.py
+├── models_request.py
+├── routes/
+│   ├── chat.py
+│   └── dashboard.py
+└── services/
+    └── data_service.py
+```
 
 ## Tests
 ```bash
 pytest tests/ -v
-```
-
-## Docker
-```bash
-docker build -t deportedata-backend .
-docker run -p 8000:8000 deportedata-backend
 ```
