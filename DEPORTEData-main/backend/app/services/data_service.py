@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 
@@ -9,6 +10,10 @@ from fastapi import HTTPException
 from app.core.config import DATA_DIR, FALLBACK_DATA_DIR
 
 ANNUAL_FILE_NAME = "medias_anuales_demografia.csv"
+ABSOLUTE_INDICATOR = "EMPLEO VINCULADO AL DEPORTE: Valores absolutos (En miles)"
+TOTAL_SEGMENT = "TOTAL"
+
+logger = logging.getLogger(__name__)
 
 
 class DataService:
@@ -24,119 +29,119 @@ class DataService:
         if fallback.exists():
             return fallback
 
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                f"No se encontró el dataset '{ANNUAL_FILE_NAME}' en '{self.data_dir}' "
-                f"ni en '{FALLBACK_DATA_DIR}'."
-            ),
+        raise ValueError(
+            f"No se encontró el dataset '{ANNUAL_FILE_NAME}' en '{self.data_dir}' ni en '{FALLBACK_DATA_DIR}'."
         )
 
-    def _read_csv(self, csv_path: Path) -> pd.DataFrame:
-        # CSVs públicos pueden venir con distintas codificaciones.
+    def load_raw_data(self) -> pd.DataFrame:
+        csv_path = self._dataset_path()
+
         for encoding in ("utf-8", "latin-1"):
             try:
-                return pd.read_csv(csv_path, sep=",", encoding=encoding)
+                df = pd.read_csv(csv_path, sep=",", encoding=encoding)
+                break
             except UnicodeDecodeError:
                 continue
+        else:
+            raise ValueError("No se pudo leer el CSV con una codificación soportada (utf-8/latin-1).")
 
-        raise HTTPException(status_code=500, detail="No se pudo leer el CSV con codificación soportada")
+        df.columns = [col.strip().lower().replace(" ", "_") for col in df.columns]
+        logger.info("CSV cargado desde %s con %s filas", csv_path, len(df))
 
-    def _normalize_columns(self, df: pd.DataFrame) -> pd.DataFrame:
-        normalized = df.copy()
-        normalized.columns = [col.strip().lower().replace(" ", "_") for col in normalized.columns]
-        return normalized
-
-    def annual_totals(self) -> pd.DataFrame:
-        csv_path = self._dataset_path()
-        df = self._read_csv(csv_path)
-        df = self._normalize_columns(df)
-
-        expected_columns = {"periodo", "valor", "sexo_edad_estudios"}
-        missing = expected_columns - set(df.columns)
+        required_columns = {"indicador", "sexo_edad_estudios", "periodo", "valor"}
+        missing = required_columns - set(df.columns)
         if missing:
-            raise HTTPException(
-                status_code=500,
-                detail=f"El CSV no contiene columnas requeridas: {', '.join(sorted(missing))}",
-            )
+            raise ValueError(f"Faltan columnas requeridas en CSV: {', '.join(sorted(missing))}.")
 
-        cleaned = df.copy()
+        if df[list(required_columns)].isnull().any().any():
+            raise ValueError("Se detectaron nulos en columnas críticas: indicador/sexo_edad_estudios/periodo/valor.")
 
-        # 1) Filtramos solo total poblacional para evitar series "exploded" por segmentos.
-        cleaned = cleaned[cleaned["sexo_edad_estudios"].astype(str).str.upper().str.strip() == "TOTAL"]
+        return df
 
-        # 2) Limpieza de tipos y nulos.
-        cleaned["periodo"] = cleaned["periodo"].astype(str).str.extract(r"(\d{4})", expand=False)
-        cleaned["year"] = pd.to_numeric(cleaned["periodo"], errors="coerce")
-        cleaned["valor"] = cleaned["valor"].astype(str).str.replace(",", ".", regex=False)
-        cleaned["value"] = pd.to_numeric(cleaned["valor"], errors="coerce")
-        cleaned = cleaned.dropna(subset=["year", "value"])
+    def clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        # Filtrado estricto para evitar mezclar magnitudes incompatibles.
+        filtered = df[
+            (df["indicador"].astype(str).str.strip() == ABSOLUTE_INDICATOR)
+            & (df["sexo_edad_estudios"].astype(str).str.upper().str.strip() == TOTAL_SEGMENT)
+        ].copy()
 
-        # 3) Eliminamos valores imposibles.
-        cleaned = cleaned[cleaned["value"] >= 0]
+        if filtered.empty:
+            raise ValueError("No hay filas del indicador absoluto para TOTAL tras filtrar el dataset.")
 
-        # 4) Quitamos duplicados exactos y agregamos por año para tener 1 punto/año.
-        cleaned = cleaned.drop_duplicates(subset=["year", "value"])
-        annual = (
-            cleaned.groupby("year", as_index=False)["value"]
-            .mean()
-            .sort_values("year")
+        filtered["year"] = pd.to_numeric(
+            filtered["periodo"].astype(str).str.extract(r"(\d{4})", expand=False),
+            errors="coerce",
+        )
+        filtered["value"] = pd.to_numeric(
+            filtered["valor"].astype(str).str.replace(",", ".", regex=False),
+            errors="coerce",
         )
 
-        # 5) Outliers extremos (regla IQR) solo si hay suficiente historia.
-        if len(annual) >= 8:
-            q1 = annual["value"].quantile(0.25)
-            q3 = annual["value"].quantile(0.75)
-            iqr = q3 - q1
-            lower = q1 - 3 * iqr
-            upper = q3 + 3 * iqr
-            annual = annual[(annual["value"] >= lower) & (annual["value"] <= upper)]
+        if filtered[["year", "value"]].isnull().any().any():
+            raise ValueError("Hay filas con año o valor no numérico tras conversión.")
+
+        # Descartamos valores imposibles.
+        filtered = filtered[filtered["value"] >= 0]
+
+        # Resolución determinista de duplicados por año.
+        annual = filtered.groupby("year", as_index=False)["value"].mean().sort_values("year")
+
+        if annual.empty:
+            raise ValueError("No hay datos válidos de empleo tras limpieza y agregación.")
 
         annual["year"] = annual["year"].astype(int)
         annual["value"] = annual["value"].astype(float)
 
-        if annual.empty:
-            raise HTTPException(status_code=500, detail="No hay datos válidos de empleo total tras limpieza.")
-
+        logger.info("Filas tras limpieza: %s; años únicos: %s", len(annual), annual["year"].nunique())
         return annual.reset_index(drop=True)
 
-    def dashboard_kpis(self) -> dict:
-        annual = self.annual_totals()
-
-        latest = annual.iloc[-1]
-        previous = annual.iloc[-2] if len(annual) > 1 else latest
-
-        previous_value = float(previous["value"])
-        growth_pct = ((float(latest["value"]) - previous_value) / previous_value * 100) if previous_value else 0.0
-
-        latest_values = [
+    def get_series(self) -> list[dict]:
+        raw = self.load_raw_data()
+        clean = self.clean_data(raw)
+        return [
             {"year": int(row.year), "value": round(float(row.value), 1)}
-            for row in annual.tail(5).itertuples(index=False)
+            for row in clean.itertuples(index=False)
         ]
+
+    def get_kpis(self) -> dict:
+        series = self.get_series()
+        latest = series[-1]
+        previous = series[-2] if len(series) > 1 else latest
+        previous_value = previous["value"]
+
+        growth_pct = ((latest["value"] - previous_value) / previous_value * 100) if previous_value else 0.0
 
         return {
             "empleo_total": round(float(latest["value"]), 1),
             "growth_pct": round(float(growth_pct), 2),
             "latest_year": int(latest["year"]),
-            "latest_values": latest_values,
+            "latest_values": series[-5:],
         }
 
+    # Backward compatibility with current routes.
     def dashboard_series(self) -> list[dict]:
-        annual = self.annual_totals()
-        return [
-            {"year": int(row.year), "value": round(float(row.value), 1)}
-            for row in annual.itertuples(index=False)
-        ]
+        try:
+            return self.get_series()
+        except ValueError as error:
+            logger.error("Error validando serie: %s", error)
+            raise HTTPException(status_code=500, detail=str(error)) from error
+
+    def dashboard_kpis(self) -> dict:
+        try:
+            return self.get_kpis()
+        except ValueError as error:
+            logger.error("Error validando KPIs: %s", error)
+            raise HTTPException(status_code=500, detail=str(error)) from error
 
     def answer_chat(self, message: str) -> str:
         clean_msg = message.lower()
-        kpis = self.dashboard_kpis()
-        series = self.dashboard_series()
+        kpis = self.get_kpis()
+        series = self.get_series()
 
         if "crec" in clean_msg or "sub" in clean_msg or "baj" in clean_msg:
             trend = "creció" if kpis["growth_pct"] >= 0 else "disminuyó"
             return (
-                f"Entre {kpis['latest_values'][-2]['year']} y {kpis['latest_year']}, el empleo deportivo {trend} "
+                f"Entre {series[-2]['year']} y {kpis['latest_year']}, el empleo deportivo {trend} "
                 f"un {abs(kpis['growth_pct'])}% y cerró en {kpis['empleo_total']} miles de personas."
             )
 
