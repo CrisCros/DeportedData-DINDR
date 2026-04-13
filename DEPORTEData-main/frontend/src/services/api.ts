@@ -10,15 +10,28 @@ export type DashboardSeries = {
   values: number[];
 };
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000';
+function resolveApiBaseUrl() {
+  const configuredUrl = import.meta.env.VITE_API_BASE_URL;
+
+  if (configuredUrl && configuredUrl.trim().length > 0) {
+    return configuredUrl.replace(/\/$/, '');
+  }
+
+  // En Vercel frontend usamos /api con rewrite a backend para evitar CORS.
+  return '/api';
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 async function apiRequest<T>(path: string, options?: RequestInit): Promise<T> {
+  const needsJsonHeader = options?.body !== undefined;
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...options,
     headers: {
-      'Content-Type': 'application/json',
+      ...(needsJsonHeader ? { 'Content-Type': 'application/json' } : {}),
       ...(options?.headers ?? {}),
     },
-    ...options,
   });
 
   if (!response.ok) {
@@ -35,8 +48,9 @@ export const dashboardApi = {
 };
 
 export const chatApi = {
-  sendMessage: (message: string) => apiRequest<{ answer: string; message: string }>('/chat', {
-    method: 'POST',
-    body: JSON.stringify({ message }),
-  }),
+  sendMessage: (message: string) =>
+    apiRequest<{ answer: string; message: string }>('/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+    }),
 };

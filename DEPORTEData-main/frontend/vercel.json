@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://deported-data-dindr-xpsr.vercel.app/:path*"
+    }
+  ]
+}
