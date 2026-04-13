@@ -10,6 +10,9 @@ export type DashboardSeries = {
   values: number[];
 };
 
+const KNOWN_PRODUCTION_FRONTEND = 'deported-data-dindr.vercel.app';
+const KNOWN_PRODUCTION_BACKEND = 'https://deported-data-dindr-xpsr.vercel.app';
+
 function resolveApiBaseUrl() {
   const configuredUrl = import.meta.env.VITE_API_BASE_URL;
   if (configuredUrl && configuredUrl.trim().length > 0) {
@@ -18,6 +21,10 @@ function resolveApiBaseUrl() {
 
   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
     return 'http://localhost:8000';
+  }
+
+  if (window.location.hostname === KNOWN_PRODUCTION_FRONTEND) {
+    return KNOWN_PRODUCTION_BACKEND;
   }
 
   throw new Error('Falta VITE_API_BASE_URL en frontend para este entorno. Configúrala en Vercel.');

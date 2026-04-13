@@ -27,6 +27,13 @@ Copia `backend/.env.example` y ajusta:
 - `DATA_DIR`: carpeta donde están los CSV limpios (en producción Vercel se recomienda `./data`).
 - `FRONTEND_ORIGINS`: lista de orígenes permitidos por CORS, separados por coma.
 
+Ejemplo despliegue actual:
+
+```env
+DATA_DIR=./data
+FRONTEND_ORIGINS=https://deported-data-dindr.vercel.app
+```
+
 ## Ejecución
 ```bash
 uvicorn app.main:app --reload --port 8000
