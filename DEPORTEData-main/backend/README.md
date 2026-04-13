@@ -49,6 +49,10 @@ uvicorn app.main:app --reload --port 8000
 }
 ```
 
+## Datos CSV
+Para despliegues serverless (ej. Vercel), incluye los CSV requeridos en `backend/data/`.
+Este repositorio ya incluye `backend/data/medias_anuales_demografia.csv`.
+
 ## Estructura del módulo
 
 ```text
