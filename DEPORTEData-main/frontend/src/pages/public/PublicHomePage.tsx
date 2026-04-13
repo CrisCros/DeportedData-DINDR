@@ -106,7 +106,7 @@ export function PublicHomePage() {
                     Últimos valores
                   </Text>
                   <Title order={4} mt={6}>
-                    {kpis ? kpis.latest_values.map((v) => `${v.year}:${v.empleo}`).join(' · ') : '...'}
+                    {kpis ? kpis.latest_values.map((v) => `${v.year}:${v.value}`).join(' · ') : '...'}
                   </Title>
                 </Paper>
               </SimpleGrid>
@@ -142,7 +142,7 @@ export function PublicHomePage() {
         })}
       </SimpleGrid>
 
-      {series ? <EmploymentLineChart years={series.years} values={series.values} /> : null}
+      {series ? <EmploymentLineChart series={series} /> : null}
 
       <ChatbotWidget />
     </>

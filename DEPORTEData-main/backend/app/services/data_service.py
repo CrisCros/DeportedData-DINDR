@@ -32,9 +32,25 @@ class DataService:
             ),
         )
 
+    def _read_csv(self, csv_path: Path) -> pd.DataFrame:
+        # CSVs públicos pueden venir con distintas codificaciones.
+        for encoding in ("utf-8", "latin-1"):
+            try:
+                return pd.read_csv(csv_path, sep=",", encoding=encoding)
+            except UnicodeDecodeError:
+                continue
+
+        raise HTTPException(status_code=500, detail="No se pudo leer el CSV con codificación soportada")
+
+    def _normalize_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        normalized = df.copy()
+        normalized.columns = [col.strip().lower().replace(" ", "_") for col in normalized.columns]
+        return normalized
+
     def annual_totals(self) -> pd.DataFrame:
         csv_path = self._dataset_path()
-        df = pd.read_csv(csv_path)
+        df = self._read_csv(csv_path)
+        df = self._normalize_columns(df)
 
         expected_columns = {"periodo", "valor", "sexo_edad_estudios"}
         missing = expected_columns - set(df.columns)
@@ -44,42 +60,73 @@ class DataService:
                 detail=f"El CSV no contiene columnas requeridas: {', '.join(sorted(missing))}",
             )
 
-        totals = df[df["sexo_edad_estudios"].str.upper() == "TOTAL"].copy()
-        totals["year"] = pd.to_numeric(totals["periodo"], errors="coerce")
-        totals["empleo"] = pd.to_numeric(totals["valor"], errors="coerce")
-        totals = totals.dropna(subset=["year", "empleo"])
+        cleaned = df.copy()
 
-        if totals.empty:
-            raise HTTPException(status_code=500, detail="No hay datos válidos de empleo total en el CSV.")
+        # 1) Filtramos solo total poblacional para evitar series "exploded" por segmentos.
+        cleaned = cleaned[cleaned["sexo_edad_estudios"].astype(str).str.upper().str.strip() == "TOTAL"]
 
-        totals = totals.sort_values("year")
-        return totals[["year", "empleo"]].reset_index(drop=True)
+        # 2) Limpieza de tipos y nulos.
+        cleaned["periodo"] = cleaned["periodo"].astype(str).str.extract(r"(\d{4})", expand=False)
+        cleaned["year"] = pd.to_numeric(cleaned["periodo"], errors="coerce")
+        cleaned["valor"] = cleaned["valor"].astype(str).str.replace(",", ".", regex=False)
+        cleaned["value"] = pd.to_numeric(cleaned["valor"], errors="coerce")
+        cleaned = cleaned.dropna(subset=["year", "value"])
+
+        # 3) Eliminamos valores imposibles.
+        cleaned = cleaned[cleaned["value"] >= 0]
+
+        # 4) Quitamos duplicados exactos y agregamos por año para tener 1 punto/año.
+        cleaned = cleaned.drop_duplicates(subset=["year", "value"])
+        annual = (
+            cleaned.groupby("year", as_index=False)["value"]
+            .mean()
+            .sort_values("year")
+        )
+
+        # 5) Outliers extremos (regla IQR) solo si hay suficiente historia.
+        if len(annual) >= 8:
+            q1 = annual["value"].quantile(0.25)
+            q3 = annual["value"].quantile(0.75)
+            iqr = q3 - q1
+            lower = q1 - 3 * iqr
+            upper = q3 + 3 * iqr
+            annual = annual[(annual["value"] >= lower) & (annual["value"] <= upper)]
+
+        annual["year"] = annual["year"].astype(int)
+        annual["value"] = annual["value"].astype(float)
+
+        if annual.empty:
+            raise HTTPException(status_code=500, detail="No hay datos válidos de empleo total tras limpieza.")
+
+        return annual.reset_index(drop=True)
 
     def dashboard_kpis(self) -> dict:
-        totals = self.annual_totals()
+        annual = self.annual_totals()
 
-        latest = totals.iloc[-1]
-        previous = totals.iloc[-2] if len(totals) > 1 else latest
-        growth_pct = ((latest["empleo"] - previous["empleo"]) / previous["empleo"] * 100) if previous["empleo"] else 0.0
+        latest = annual.iloc[-1]
+        previous = annual.iloc[-2] if len(annual) > 1 else latest
 
-        last_values = [
-            {"year": int(row.year), "empleo": round(float(row.empleo), 1)}
-            for row in totals.tail(5).itertuples(index=False)
+        previous_value = float(previous["value"])
+        growth_pct = ((float(latest["value"]) - previous_value) / previous_value * 100) if previous_value else 0.0
+
+        latest_values = [
+            {"year": int(row.year), "value": round(float(row.value), 1)}
+            for row in annual.tail(5).itertuples(index=False)
         ]
 
         return {
-            "empleo_total": round(float(latest["empleo"]), 1),
+            "empleo_total": round(float(latest["value"]), 1),
             "growth_pct": round(float(growth_pct), 2),
             "latest_year": int(latest["year"]),
-            "latest_values": last_values,
+            "latest_values": latest_values,
         }
 
-    def dashboard_series(self) -> dict:
-        totals = self.annual_totals()
-        return {
-            "years": [int(year) for year in totals["year"].tolist()],
-            "values": [round(float(value), 1) for value in totals["empleo"].tolist()],
-        }
+    def dashboard_series(self) -> list[dict]:
+        annual = self.annual_totals()
+        return [
+            {"year": int(row.year), "value": round(float(row.value), 1)}
+            for row in annual.itertuples(index=False)
+        ]
 
     def answer_chat(self, message: str) -> str:
         clean_msg = message.lower()
@@ -94,8 +141,8 @@ class DataService:
             )
 
         if "año" in clean_msg or "serie" in clean_msg or "histor" in clean_msg:
-            first_year = series["years"][0]
-            last_year = series["years"][-1]
+            first_year = series[0]["year"]
+            last_year = series[-1]["year"]
             return (
                 f"Tengo datos anuales desde {first_year} hasta {last_year}. "
                 f"El valor más reciente es {kpis['empleo_total']} miles de personas en {kpis['latest_year']}."

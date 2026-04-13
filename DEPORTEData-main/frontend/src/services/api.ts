@@ -2,13 +2,10 @@ export type DashboardKpis = {
   empleo_total: number;
   growth_pct: number;
   latest_year: number;
-  latest_values: Array<{ year: number; empleo: number }>;
+  latest_values: Array<{ year: number; value: number }>;
 };
 
-export type DashboardSeries = {
-  years: number[];
-  values: number[];
-};
+export type DashboardSeries = Array<{ year: number; value: number }>;
 
 function resolveApiBaseUrl() {
   const configuredUrl = import.meta.env.VITE_API_BASE_URL;
