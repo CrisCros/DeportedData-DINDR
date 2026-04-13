@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.config import FRONTEND_ORIGINS
+from app.core.config import FRONTEND_ORIGIN
 from app.funciones import create_token
 from app.models_request import LoginRequest
 from app.routes.chat import router as chat_router
@@ -10,17 +10,13 @@ from app.routes.dashboard import router as dashboard_router
 app = FastAPI(
     title="DeporteData API",
     description="Backend API para DeporteData",
-    version="0.3.1",
+    version="0.3.0",
 )
-
-explicit_origins = [origin for origin in FRONTEND_ORIGINS if "*" not in origin]
-has_vercel_wildcard = any(origin == "https://*.vercel.app" for origin in FRONTEND_ORIGINS)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=explicit_origins,
-    allow_origin_regex=r"https://.*\.vercel\.app" if has_vercel_wildcard else None,
-    allow_credentials=False,
+    allow_origins=[FRONTEND_ORIGIN, "http://127.0.0.1:5173"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
