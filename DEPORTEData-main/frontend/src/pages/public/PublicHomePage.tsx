@@ -33,9 +33,8 @@ export function PublicHomePage() {
         ]);
         setKpis(kpisResponse);
         setSeries(seriesResponse);
-      } catch (err) {
-        const details = err instanceof Error ? err.message : 'Error desconocido';
-        setError(`No se pudieron cargar los datos del backend. ${details}`);
+      } catch {
+        setError('No se pudieron cargar los datos del backend. Revisa la configuración de API.');
       }
     };
 

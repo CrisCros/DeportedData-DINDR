@@ -43,11 +43,10 @@ export function ChatbotWidget() {
     try {
       const response = await chatApi.sendMessage(content);
       setMessages((prev) => [...prev, { role: 'assistant', text: response.answer }]);
-    } catch (err) {
-      const details = err instanceof Error ? err.message : 'Error desconocido';
+    } catch {
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', text: `No pude consultar el backend: ${details}` },
+        { role: 'assistant', text: 'No pude consultar el backend ahora mismo. Inténtalo de nuevo.' },
       ]);
     } finally {
       setLoading(false);
